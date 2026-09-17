@@ -2,3 +2,4 @@ pandas
 polars
 matplotlib
 scikit-learn
+pytest
