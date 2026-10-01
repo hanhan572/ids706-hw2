@@ -85,6 +85,56 @@ def summarize_by_type(df: pd.DataFrame) -> pd.DataFrame:
     return summary
 
 
+def high_quality_rate_by_type(
+    df: pd.DataFrame,
+    threshold: float = 7,
+) -> pd.DataFrame:
+    """Calculate the percentage of high-quality wines for each wine type."""
+    required = {"type", "quality"}
+    validate_columns(df, required)
+
+    result = (
+        df.assign(high_quality=df["quality"] >= threshold)
+        .groupby("type")
+        .agg(
+            total_wines=("quality", "count"),
+            high_quality_wines=("high_quality", "sum"),
+            high_quality_rate=("high_quality", "mean"),
+        )
+        .sort_index()
+    )
+
+    result["high_quality_rate"] = result["high_quality_rate"] * 100
+
+    return result
+
+
+def detect_outliers_iqr(df: pd.DataFrame) -> pd.Series:
+    """Count IQR-based outliers in each numeric column."""
+    numeric_df = df.select_dtypes(include="number")
+
+    if numeric_df.empty:
+        return pd.Series(dtype="int64", name="outlier_count")
+
+    outlier_counts = {}
+
+    for column in numeric_df.columns:
+        q1 = numeric_df[column].quantile(0.25)
+        q3 = numeric_df[column].quantile(0.75)
+        iqr = q3 - q1
+
+        lower_bound = q1 - 1.5 * iqr
+        upper_bound = q3 + 1.5 * iqr
+
+        is_outlier = (numeric_df[column] < lower_bound) | (
+            numeric_df[column] > upper_bound
+        )
+
+        outlier_counts[column] = int(is_outlier.sum())
+
+    return pd.Series(outlier_counts, name="outlier_count")
+
+
 def create_visualization(
     df: pd.DataFrame,
     output_path: str | Path,
@@ -107,6 +157,36 @@ def create_visualization(
     ax.set_xlabel("Alcohol Content")
     ax.set_ylabel("Wine Quality")
     ax.set_title("Alcohol Content vs Wine Quality")
+
+    fig.tight_layout()
+    fig.savefig(output_path)
+    plt.close(fig)
+
+    return output_path
+
+
+def create_high_quality_rate_visualization(
+    rate_summary: pd.DataFrame,
+    output_path: str | Path,
+) -> Path:
+    """Create and save a bar chart of high-quality wine rates by type."""
+    if "high_quality_rate" not in rate_summary.columns:
+        raise ValueError("Missing required column: high_quality_rate")
+
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    fig, ax = plt.subplots(figsize=(7, 5))
+
+    rate_summary["high_quality_rate"].plot(
+        kind="bar",
+        ax=ax,
+    )
+
+    ax.set_xlabel("Wine Type")
+    ax.set_ylabel("High-Quality Wines (%)")
+    ax.set_title("High-Quality Wine Rate by Type")
+    ax.tick_params(axis="x", rotation=0)
 
     fig.tight_layout()
     fig.savefig(output_path)
@@ -194,6 +274,7 @@ def benchmark_pandas_polars(data_path: str | Path) -> dict:
 def run_analysis(
     data_path: str | Path,
     plot_path: str | Path,
+    quality_rate_plot_path: str | Path | None = None,
 ) -> dict:
     """Run the complete wine-quality analysis workflow."""
     original_df = load_data(data_path)
@@ -201,8 +282,16 @@ def run_analysis(
 
     high_quality = filter_high_quality(cleaned_df)
     type_summary = summarize_by_type(cleaned_df)
+    high_quality_rate = high_quality_rate_by_type(cleaned_df)
+    outlier_counts = detect_outliers_iqr(cleaned_df)
 
     create_visualization(cleaned_df, plot_path)
+
+    if quality_rate_plot_path is not None:
+        create_high_quality_rate_visualization(
+            high_quality_rate,
+            quality_rate_plot_path,
+        )
 
     model_results = train_model(cleaned_df)
 
@@ -211,8 +300,13 @@ def run_analysis(
         "cleaned_df": cleaned_df,
         "high_quality": high_quality,
         "type_summary": type_summary,
+        "high_quality_rate": high_quality_rate,
+        "outlier_counts": outlier_counts,
         "model_results": model_results,
         "plot_path": Path(plot_path),
+        "quality_rate_plot_path": (
+            Path(quality_rate_plot_path) if quality_rate_plot_path is not None else None
+        ),
     }
 
 
@@ -220,13 +314,20 @@ def main() -> None:
     """Run the project analysis from the command line."""
     data_path = Path("data/wine_quality_merged.csv")
     plot_path = Path("wine_quality_scatter.png")
+    quality_rate_plot_path = Path("high_quality_rate_by_type.png")
 
-    results = run_analysis(data_path, plot_path)
+    results = run_analysis(
+        data_path,
+        plot_path,
+        quality_rate_plot_path,
+    )
 
     original_df = results["original_df"]
     cleaned_df = results["cleaned_df"]
     high_quality = results["high_quality"]
     type_summary = results["type_summary"]
+    high_quality_rate = results["high_quality_rate"]
+    outlier_counts = results["outlier_counts"]
     model_results = results["model_results"]
 
     print("First Five Rows:")
@@ -264,6 +365,17 @@ def main() -> None:
 
     print("\nSummary by Wine Type:")
     print(type_summary)
+
+    print("\nHigh-Quality Wine Rate by Type:")
+    print(high_quality_rate)
+
+    print("\nIQR-Based Outlier Counts:")
+    print(outlier_counts)
+
+    print(
+        "\nOutlier Treatment: Outliers are reported but preserved "
+        "because unusual measurements may represent valid wines."
+    )
 
     print("\nMachine Learning Results:")
     print(f"Mean Absolute Error: {model_results['mae']:.3f}")
