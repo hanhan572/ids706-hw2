@@ -9,7 +9,6 @@ from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_absolute_error, r2_score
 from sklearn.model_selection import train_test_split
 
-
 REQUIRED_COLUMNS = {
     "fixed acidity",
     "volatile acidity",
@@ -163,15 +162,7 @@ def benchmark_pandas_polars(data_path: str | Path) -> dict:
     pandas_df = pd.read_csv(data_path)
     pandas_df = pandas_df.drop_duplicates()
 
-    pandas_summary = (
-        pandas_df.groupby("type")
-        .agg(
-            average_quality=("quality", "mean"),
-            average_alcohol=("alcohol", "mean"),
-            count=("quality", "count"),
-        )
-        .sort_index()
-    )
+    pandas_summary = summarize_by_type(pandas_df)
 
     pandas_time = time.perf_counter() - pandas_start
 
